@@ -16,7 +16,7 @@ WORKDIR /app
 COPY --from=build /app/out ./
 
 # Expose the port your application runs on
-EXPOSE 5000
+EXPOSE 5001
 
 # Set the entry point for the container
 ENTRYPOINT ["dotnet", "App_Core.dll"]
