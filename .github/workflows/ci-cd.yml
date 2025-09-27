@@ -39,6 +39,6 @@ jobs:
 
     - name: Push Docker image
       run: |
-        IMAGE_NAME=mydockerhubusername/mywebapi
+        IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/mywebapi
         docker tag mywebapi:latest $IMAGE_NAME:latest
         docker push $IMAGE_NAME:latest
