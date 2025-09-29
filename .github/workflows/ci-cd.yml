@@ -1,4 +1,4 @@
-name: Build and Deploy ASP.NET Core to Elastic Beanstalk
+name: CCI/CD - Deploy ASP.NET Core to AWS Elastic Beanstalk
 
 on:
   push:
@@ -57,7 +57,6 @@ jobs:
         run: |
           APP_NAME=${{ secrets.EB_APP_NAME }}
           ENV_NAME=${{ secrets.EB_ENV_NAME }}
-          REGION=${{ secrets.AWS_REGION }}
           EXISTS=$(aws elasticbeanstalk describe-environments --application-name "$APP_NAME" --environment-names "$ENV_NAME" || true)
           if [[ $EXISTS == *"InvalidParameterValue"* ]]; then
             echo "Creating EB Environment $ENV_NAME..."
@@ -75,6 +74,13 @@ jobs:
           BUCKET="elasticbeanstalk-${{ secrets.AWS_REGION }}-${{ secrets.AWS_ACCOUNT_ID }}"
           APP_NAME=${{ secrets.EB_APP_NAME }}
           VERSION="build-${{ github.run_number }}"
+
+          # Ensure bucket exists
+          if ! aws s3 ls "s3://$BUCKET" >/dev/null 2>&1; then
+            echo "Creating bucket $BUCKET..."
+            aws s3 mb s3://$BUCKET --region ${{ secrets.AWS_REGION }}
+          fi
+
           aws s3 cp app.zip s3://$BUCKET/$APP_NAME/$VERSION.zip
 
           aws elasticbeanstalk create-application-version \
