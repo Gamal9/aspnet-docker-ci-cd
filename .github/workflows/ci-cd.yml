@@ -1,44 +1,96 @@
-name: CI/CD Pipeline
+name: Build and Deploy ASP.NET Core to Elastic Beanstalk
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
 
-    - name: Restore dependencies
-      run: dotnet restore
+      - name: Restore dependencies
+        run: dotnet restore
 
-    - name: Build
-      run: dotnet build --no-restore --configuration Release
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
 
-    - name: Test
-      run: dotnet test --no-build --verbosity normal
+      - name: Publish
+        run: dotnet publish -c Release -o ./publish
 
-    - name: Build Docker image
-      run: docker build -t mywebapi:latest .
+      - name: Install AWS CLI
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
 
-    - name: Login to DockerHub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-    - name: Push Docker image
-      run: |
-        IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/mywebapi
-        docker tag mywebapi:latest $IMAGE_NAME:latest
-        docker push $IMAGE_NAME:latest
+      - name: Package app as zip
+        run: |
+          cd publish
+          zip -r ../app.zip .
+          cd ..
+
+      - name: Ensure Elastic Beanstalk Application exists
+        run: |
+          APP_NAME=${{ secrets.EB_APP_NAME }}
+          EXISTS=$(aws elasticbeanstalk describe-applications --application-names "$APP_NAME" || true)
+          if [[ $EXISTS == *"InvalidParameterValue"* ]]; then
+            echo "Creating EB Application $APP_NAME..."
+            aws elasticbeanstalk create-application --application-name "$APP_NAME"
+          else
+            echo "Application $APP_NAME exists."
+          fi
+
+      - name: Ensure Elastic Beanstalk Environment exists
+        run: |
+          APP_NAME=${{ secrets.EB_APP_NAME }}
+          ENV_NAME=${{ secrets.EB_ENV_NAME }}
+          REGION=${{ secrets.AWS_REGION }}
+          EXISTS=$(aws elasticbeanstalk describe-environments --application-name "$APP_NAME" --environment-names "$ENV_NAME" || true)
+          if [[ $EXISTS == *"InvalidParameterValue"* ]]; then
+            echo "Creating EB Environment $ENV_NAME..."
+            aws elasticbeanstalk create-environment \
+              --application-name "$APP_NAME" \
+              --environment-name "$ENV_NAME" \
+              --solution-stack-name "64bit Amazon Linux 2023 v4.0.6 running .NET Core" \
+              --tier "Name=WebServer,Type=Standard,Version=1.0"
+          else
+            echo "Environment $ENV_NAME exists."
+          fi
+
+      - name: Upload new version to S3
+        run: |
+          BUCKET="elasticbeanstalk-${{ secrets.AWS_REGION }}-${{ secrets.AWS_ACCOUNT_ID }}"
+          APP_NAME=${{ secrets.EB_APP_NAME }}
+          VERSION="build-${{ github.run_number }}"
+          aws s3 cp app.zip s3://$BUCKET/$APP_NAME/$VERSION.zip
+
+          aws elasticbeanstalk create-application-version \
+            --application-name $APP_NAME \
+            --version-label $VERSION \
+            --source-bundle S3Bucket=$BUCKET,S3Key=$APP_NAME/$VERSION.zip
+
+      - name: Deploy new version to EB
+        run: |
+          APP_NAME=${{ secrets.EB_APP_NAME }}
+          ENV_NAME=${{ secrets.EB_ENV_NAME }}
+          VERSION="build-${{ github.run_number }}"
+
+          aws elasticbeanstalk update-environment \
+            --environment-name $ENV_NAME \
+            --version-label $VERSION
